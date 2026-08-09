@@ -22,6 +22,7 @@ use crate::error::AppResult;
 use crate::services::disc_service::{
     self, disc_date_sort_sql, disc_order_by_sql, display_title_sort_sql,
 };
+use crate::services::queue_service;
 use crate::AppState;
 
 use super::compact_query_url;
@@ -308,6 +309,7 @@ pub struct DiscsQuery {
     pub edition_exact: Option<String>,
     pub barcode: Option<String>,
     pub barcode_exact: Option<String>,
+    pub universal_hash: Option<String>,
     pub tracks_min: Option<String>,
     pub tracks_max: Option<String>,
     pub errors_min: Option<String>,
@@ -362,7 +364,26 @@ async fn load_hash_candidates(
     pool: &sqlx::PgPool,
     terms: &[String],
 ) -> AppResult<HashMap<String, Vec<i32>>> {
+    let Some(mut builder) = build_hash_candidate_query(terms) else {
+        return Ok(HashMap::new());
+    };
+
+    let rows: Vec<HashCandidateRow> = builder.build_query_as().fetch_all(pool).await?;
+    let mut candidates = HashMap::new();
+    for row in rows {
+        let disc_ids = candidates.entry(row.term).or_insert_with(Vec::new);
+        if !disc_ids.contains(&row.disc_id) {
+            disc_ids.push(row.disc_id);
+        }
+    }
+    Ok(candidates)
+}
+
+fn build_hash_candidate_query(
+    terms: &[String],
+) -> Option<sqlx::QueryBuilder<'static, sqlx::Postgres>> {
     let mut by_field: HashMap<HashField, Vec<String>> = HashMap::new();
+    let mut universal_hashes = Vec::new();
     for term in terms {
         if let Some(field) = hash_field_for_term(term) {
             let values = by_field.entry(field).or_default();
@@ -370,9 +391,14 @@ async fn load_hash_candidates(
                 values.push(term.clone());
             }
         }
+        if let Some(hash) = queue_service::universal_hash_bytes_for_matching(Some(term)) {
+            if !universal_hashes.contains(&hash) {
+                universal_hashes.push(hash);
+            }
+        }
     }
-    if by_field.is_empty() {
-        return Ok(HashMap::new());
+    if by_field.is_empty() && universal_hashes.is_empty() {
+        return None;
     }
 
     let mut builder = sqlx::QueryBuilder::<sqlx::Postgres>::new("");
@@ -393,15 +419,22 @@ async fn load_hash_candidates(
         builder.push(")");
     }
 
-    let rows: Vec<HashCandidateRow> = builder.build_query_as().fetch_all(pool).await?;
-    let mut candidates = HashMap::new();
-    for row in rows {
-        candidates
-            .entry(row.term)
-            .or_insert_with(Vec::new)
-            .push(row.disc_id);
+    if !universal_hashes.is_empty() {
+        if !first {
+            builder.push(" UNION ALL ");
+        }
+        builder.push(
+            "SELECT encode(universal_hash, 'hex') AS term, id AS disc_id \
+             FROM discs WHERE universal_hash IN (",
+        );
+        let mut separated = builder.separated(", ");
+        for hash in universal_hashes {
+            separated.push_bind(hash);
+        }
+        separated.push_unseparated(")");
     }
-    Ok(candidates)
+
+    Some(builder)
 }
 
 fn quick_search_terms(input: &str) -> Vec<String> {
@@ -495,6 +528,27 @@ fn scalar_text_bind_value(value: &str, exact: bool) -> String {
         value.to_string()
     } else {
         value.trim().to_string()
+    }
+}
+
+fn universal_hash_search_clause(bind_idx: u32) -> String {
+    format!("d.universal_hash = ${bind_idx}")
+}
+
+fn add_universal_hash_clause(
+    where_clauses: &mut Vec<String>,
+    bind_idx: &mut u32,
+    active: bool,
+    hash_bytes: Option<&[u8]>,
+) {
+    if !active {
+        return;
+    }
+    if hash_bytes.is_some() {
+        *bind_idx += 1;
+        where_clauses.push(universal_hash_search_clause(*bind_idx));
+    } else {
+        where_clauses.push("FALSE".to_owned());
     }
 }
 
@@ -771,6 +825,7 @@ struct DiscsTemplate {
     edition_exact: bool,
     filter_barcode: String,
     barcode_exact: bool,
+    filter_universal_hash: String,
     filter_tracks_min: String,
     filter_tracks_max: String,
     tracks_exact: bool,
@@ -830,6 +885,7 @@ impl DiscsTemplate {
             edition_exact: self.edition_exact,
             barcode: &self.filter_barcode,
             barcode_exact: self.barcode_exact,
+            universal_hash: &self.filter_universal_hash,
             tracks_min: &self.filter_tracks_min,
             tracks_max: &self.filter_tracks_max,
             errors_min: &self.filter_errors_min,
@@ -890,6 +946,7 @@ struct DiscsUrlOptions<'a> {
     edition_exact: bool,
     barcode: &'a str,
     barcode_exact: bool,
+    universal_hash: &'a str,
     tracks_min: &'a str,
     tracks_max: &'a str,
     errors_min: &'a str,
@@ -975,6 +1032,7 @@ fn build_discs_url(options: DiscsUrlOptions<'_>) -> String {
             ("edition_exact", edition_exact),
             ("barcode", options.barcode),
             ("barcode_exact", barcode_exact),
+            ("universal_hash", options.universal_hash),
             ("tracks_min", options.tracks_min),
             ("tracks_max", options.tracks_max),
             ("errors_min", options.errors_min),
@@ -1341,6 +1399,10 @@ async fn discs_page(
     let barcode_bind = active_barcode
         .as_deref()
         .map(|value| array_text_bind_value(value, barcode_exact));
+    let active_universal_hash = active_advanced_filter(query.universal_hash.as_ref());
+    let filter_universal_hash = active_universal_hash.clone().unwrap_or_default();
+    let universal_hash_bind =
+        queue_service::universal_hash_bytes_for_matching(active_universal_hash.as_deref());
     let filter_tracks_min_value = normalize_non_negative_bound(query.tracks_min.as_deref());
     let filter_tracks_max_value = normalize_non_negative_bound(query.tracks_max.as_deref());
     let filter_tracks_min = filter_tracks_min_value
@@ -1588,6 +1650,12 @@ async fn discs_page(
             ),
         ],
     );
+    add_universal_hash_clause(
+        &mut where_clauses,
+        &mut bind_idx,
+        active_universal_hash.is_some(),
+        universal_hash_bind.as_deref(),
+    );
     add_track_count_clauses(
         &mut where_clauses,
         &mut bind_idx,
@@ -1725,6 +1793,10 @@ async fn discs_page(
     let count_key_serial = serial_bind.clone().unwrap_or_default();
     let count_key_edition = edition_bind.clone().unwrap_or_default();
     let count_key_barcode = barcode_bind.clone().unwrap_or_default();
+    let count_key_universal_hash = active_universal_hash
+        .as_deref()
+        .map(str::to_lowercase)
+        .unwrap_or_default();
     let count_key_protection = active_protection
         .as_deref()
         .map(str::to_lowercase)
@@ -1778,6 +1850,7 @@ async fn discs_page(
             edition_exact,
             barcode: &count_key_barcode,
             barcode_exact,
+            universal_hash: &count_key_universal_hash,
             tracks_min: &filter_tracks_min,
             tracks_max: &filter_tracks_max,
             errors_min: &filter_errors_min,
@@ -1913,6 +1986,9 @@ async fn discs_page(
     }
     if let Some(barcode) = &barcode_bind {
         bind_queries!(barcode.clone());
+    }
+    if let Some(universal_hash) = &universal_hash_bind {
+        bind_queries!(universal_hash.clone());
     }
     if let Some(tracks_min) = filter_tracks_min_value {
         bind_queries!(tracks_min);
@@ -2075,6 +2151,7 @@ async fn discs_page(
             edition_exact,
             filter_barcode,
             barcode_exact,
+            filter_universal_hash,
             filter_tracks_min,
             filter_tracks_max,
             tracks_exact,
@@ -2472,6 +2549,7 @@ mod tests {
         let barcode = template
             .find("id=\"barcode-filter-label\">Barcode</span>")
             .unwrap();
+        let universal_hash = template.find("<span>Universal Hash</span>").unwrap();
         let tracks = template.find("<span>Tracks</span>").unwrap();
         let errors = template.find("<span>Errors</span>").unwrap();
         let edc = template.find("id=\"edc-filter-label\">EDC</span>").unwrap();
@@ -2492,7 +2570,8 @@ mod tests {
                 && title_foreign < serial
                 && serial < edition
                 && edition < barcode
-                && barcode < tracks
+                && barcode < universal_hash
+                && universal_hash < tracks
                 && tracks < errors
                 && errors < edc
                 && edc < protection
@@ -2521,6 +2600,7 @@ mod tests {
         assert_eq!(template.matches("name=\"edition_exact\"").count(), 3);
         assert_eq!(template.matches("name=\"barcode\"").count(), 3);
         assert_eq!(template.matches("name=\"barcode_exact\"").count(), 3);
+        assert_eq!(template.matches("name=\"universal_hash\"").count(), 3);
         assert_eq!(template.matches("name=\"tracks_min\"").count(), 3);
         assert_eq!(template.matches("name=\"tracks_max\"").count(), 4);
         assert_eq!(template.matches("name=\"errors_min\"").count(), 3);
@@ -2759,6 +2839,7 @@ mod tests {
                 edition_exact: true,
                 barcode: "0 12345 67890",
                 barcode_exact: true,
+                universal_hash: "AABBCCDDEEFF00112233445566778899AABBCCDD",
                 tracks_min: "2",
                 tracks_max: "8",
                 errors_min: "3",
@@ -2779,7 +2860,7 @@ mod tests {
                 page: 2,
                 advanced: true,
             }),
-            "/discs?system=PS2&region=us&language=en&media=dvd9&category=Bonus%20Discs&status=Verified&letter=%23&dumper=A%2FB&title=Game%20Title%21&title_exact=1&title_foreign=Foreign%20Title&title_foreign_exact=1&serial=SLUS%2012345&serial_exact=1&edition=Limited%20Edition&edition_exact=1&barcode=0%2012345%2067890&barcode_exact=1&tracks_min=2&tracks_max=8&errors_min=3&errors_max=12&edc=no&protection=SecuROM%207%2B&comments=Disc%20%26%20manual&contents=Game%20data%20%26%20extras&mastering_code=MASTER%20%20L0&mastering_sid=IFPI%20L123&toolstamp=A%201&mould_sid=IFPI%201234&additional_mould=A2&offset=123&q=Game%20Name&sort=status&order=desc&page=2&advanced=1"
+            "/discs?system=PS2&region=us&language=en&media=dvd9&category=Bonus%20Discs&status=Verified&letter=%23&dumper=A%2FB&title=Game%20Title%21&title_exact=1&title_foreign=Foreign%20Title&title_foreign_exact=1&serial=SLUS%2012345&serial_exact=1&edition=Limited%20Edition&edition_exact=1&barcode=0%2012345%2067890&barcode_exact=1&universal_hash=AABBCCDDEEFF00112233445566778899AABBCCDD&tracks_min=2&tracks_max=8&errors_min=3&errors_max=12&edc=no&protection=SecuROM%207%2B&comments=Disc%20%26%20manual&contents=Game%20data%20%26%20extras&mastering_code=MASTER%20%20L0&mastering_sid=IFPI%20L123&toolstamp=A%201&mould_sid=IFPI%201234&additional_mould=A2&offset=123&q=Game%20Name&sort=status&order=desc&page=2&advanced=1"
         );
 
         assert_eq!(
@@ -2910,6 +2991,26 @@ mod tests {
     }
 
     #[test]
+    fn quick_search_prefetches_file_sha1_and_disc_universal_hash_candidates() {
+        let sha1 = "0123456789abcdef0123456789abcdef01234567".to_owned();
+        let query = build_hash_candidate_query(&[sha1]).unwrap();
+        let sql = query.sql();
+
+        assert!(
+            sql.contains("SELECT LOWER(sha1) AS term, disc_id FROM files WHERE LOWER(sha1) = ANY(")
+        );
+        assert!(sql.contains("UNION ALL"));
+        assert!(sql.contains(
+            "SELECT encode(universal_hash, 'hex') AS term, id AS disc_id FROM discs WHERE universal_hash IN ("
+        ));
+
+        let crc_query = build_hash_candidate_query(&["deadbeef".to_owned()]).unwrap();
+        assert!(crc_query.sql().contains("LOWER(crc32)"));
+        assert!(!crc_query.sql().contains("universal_hash"));
+        assert!(build_hash_candidate_query(&["ordinary".to_owned()]).is_none());
+    }
+
+    #[test]
     fn active_advanced_filter_uses_non_empty_text() {
         let text = "  Original Edition  ".to_string();
         let empty = "   ".to_string();
@@ -2938,6 +3039,25 @@ mod tests {
         assert_eq!(active_verbatim_filter(Some(&text)), Some(text.clone()));
         assert_eq!(active_verbatim_filter(Some(&empty)), None);
         assert_eq!(active_verbatim_filter(None), None);
+    }
+
+    #[test]
+    fn universal_hash_filter_matches_native_bytes_and_rejects_invalid_text() {
+        assert_eq!(universal_hash_search_clause(9), "d.universal_hash = $9");
+
+        let mut clauses = Vec::new();
+        let mut bind_idx = 8;
+        add_universal_hash_clause(&mut clauses, &mut bind_idx, true, Some(&[0; 20]));
+        assert_eq!(bind_idx, 9);
+        assert_eq!(clauses, ["d.universal_hash = $9".to_owned()]);
+
+        let mut invalid_clauses = Vec::new();
+        add_universal_hash_clause(&mut invalid_clauses, &mut bind_idx, true, None);
+        assert_eq!(bind_idx, 9);
+        assert_eq!(invalid_clauses, ["FALSE".to_owned()]);
+
+        add_universal_hash_clause(&mut invalid_clauses, &mut bind_idx, false, None);
+        assert_eq!(invalid_clauses, ["FALSE".to_owned()]);
     }
 
     #[test]
@@ -3171,7 +3291,7 @@ mod tests {
 
     #[test]
     fn disc_query_uses_unsuffixed_advanced_text_parameters_only() {
-        let uri = "/discs?title=Game&title_exact=1&title_foreign=Foreign&title_foreign_exact=1&serial=SLUS-12345&serial_exact=1&edition=Limited&edition_exact=1&barcode=012345&barcode_exact=1&protection=SecuROM&comments=Note&contents=Bonus%20videos&mastering_code=MASTER-L0&mastering_sid=IFPI-L123&toolstamp=A1&mould_sid=IFPI-1234&additional_mould=A2&offset=%2B123&ringcode=OLD&edition_q=Old&comments_q=Old"
+        let uri = "/discs?title=Game&title_exact=1&title_foreign=Foreign&title_foreign_exact=1&serial=SLUS-12345&serial_exact=1&edition=Limited&edition_exact=1&barcode=012345&barcode_exact=1&universal_hash=aabbccddeeff00112233445566778899aabbccdd&protection=SecuROM&comments=Note&contents=Bonus%20videos&mastering_code=MASTER-L0&mastering_sid=IFPI-L123&toolstamp=A1&mould_sid=IFPI-1234&additional_mould=A2&offset=%2B123&ringcode=OLD&edition_q=Old&comments_q=Old"
                 .parse()
                 .unwrap();
         let Query(query) = Query::<DiscsQuery>::try_from_uri(&uri).unwrap();
@@ -3186,6 +3306,10 @@ mod tests {
         assert_eq!(query.edition_exact.as_deref(), Some("1"));
         assert_eq!(query.barcode.as_deref(), Some("012345"));
         assert_eq!(query.barcode_exact.as_deref(), Some("1"));
+        assert_eq!(
+            query.universal_hash.as_deref(),
+            Some("aabbccddeeff00112233445566778899aabbccdd")
+        );
         assert_eq!(query.protection.as_deref(), Some("SecuROM"));
         assert_eq!(query.comments.as_deref(), Some("Note"));
         assert_eq!(query.contents.as_deref(), Some("Bonus videos"));

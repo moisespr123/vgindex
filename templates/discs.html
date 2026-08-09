@@ -135,6 +135,10 @@
                     </label>
                 </div>
             </div>
+            <label class="advanced-search-row">
+                <span>Universal Hash</span>
+                <input type="text" name="universal_hash" value="{{ filter_universal_hash }}">
+            </label>
             <div class="advanced-search-row">
                 <span>Tracks</span>
                 <div class="count-range-controls">
@@ -284,6 +288,7 @@
                     {% if edition_exact %}<input type="hidden" name="edition_exact" value="1">{% endif %}
                     {% if !filter_barcode.is_empty() %}<input type="hidden" name="barcode" value="{{ filter_barcode }}">{% endif %}
                     {% if barcode_exact %}<input type="hidden" name="barcode_exact" value="1">{% endif %}
+                    {% if !filter_universal_hash.is_empty() %}<input type="hidden" name="universal_hash" value="{{ filter_universal_hash }}">{% endif %}
                     {% if !filter_tracks_min.is_empty() %}<input type="hidden" name="tracks_min" value="{{ filter_tracks_min }}">{% endif %}
                     {% if !filter_tracks_max.is_empty() %}<input type="hidden" name="tracks_max" value="{{ filter_tracks_max }}">{% endif %}
                     {% if !filter_errors_min.is_empty() %}<input type="hidden" name="errors_min" value="{{ filter_errors_min }}">{% endif %}
@@ -389,6 +394,7 @@
                     {% if edition_exact %}<input type="hidden" name="edition_exact" value="1">{% endif %}
                     {% if !filter_barcode.is_empty() %}<input type="hidden" name="barcode" value="{{ filter_barcode }}">{% endif %}
                     {% if barcode_exact %}<input type="hidden" name="barcode_exact" value="1">{% endif %}
+                    {% if !filter_universal_hash.is_empty() %}<input type="hidden" name="universal_hash" value="{{ filter_universal_hash }}">{% endif %}
                     {% if !filter_tracks_min.is_empty() %}<input type="hidden" name="tracks_min" value="{{ filter_tracks_min }}">{% endif %}
                     {% if !filter_tracks_max.is_empty() %}<input type="hidden" name="tracks_max" value="{{ filter_tracks_max }}">{% endif %}
                     {% if !filter_errors_min.is_empty() %}<input type="hidden" name="errors_min" value="{{ filter_errors_min }}">{% endif %}
