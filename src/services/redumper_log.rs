@@ -81,6 +81,7 @@ fn parse_internal(
     let split = latest_section(&lines, "SPLIT");
     let hash = latest_section(&lines, "HASH");
     let protection_section = latest_section(&lines, "PROTECTION");
+    let dvdkey = latest_section(&lines, "DVDKEY");
 
     let mut result = ParsedRedumperLog::default();
 
@@ -119,6 +120,12 @@ fn parse_internal(
         result.system_code = Some(code);
     }
 
+    if dvdkey.as_deref().is_some_and(dvdkey_has_css_cppm)
+        && known_system_codes.iter().any(|code| code == "DVD-VIDEO")
+    {
+        result.system_code = Some("DVD-VIDEO".to_owned());
+    }
+
     if let Some(split) = split.as_deref() {
         result.universal_hash = scalar_value(split, "Universal Hash (SHA-1):").filter(|value| {
             value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -152,7 +159,11 @@ fn parse_internal(
         });
     }
 
-    result.protection = protection(protection_section.as_deref(), info.as_deref());
+    result.protection = protection(
+        protection_section.as_deref(),
+        dvdkey.as_deref(),
+        info.as_deref(),
+    );
     result.media_type = result.system_code.as_deref().and_then(|system_code| {
         let profile = latest_profile(&lines)?;
         let media_types = known_systems
@@ -383,7 +394,73 @@ fn protection_system_code(lines: &[&str], known_system_codes: &[String]) -> Opti
     })
 }
 
-fn protection(protection_lines: Option<&[&str]>, info_lines: Option<&[&str]>) -> Option<String> {
+fn dvdkey_has_css_cppm(lines: &[&str]) -> bool {
+    scalar_value(lines, "protection system type:")
+        .is_some_and(|value| value.eq_ignore_ascii_case("CSS/CPPM"))
+}
+
+fn normalized_dvd_key(value: &str) -> Option<String> {
+    let bytes: Vec<&str> = value.trim().split(':').collect();
+    if bytes.len() != 5
+        || bytes
+            .iter()
+            .any(|byte| byte.len() != 2 || !byte.bytes().all(|value| value.is_ascii_hexdigit()))
+    {
+        return None;
+    }
+    Some(
+        bytes
+            .into_iter()
+            .map(str::to_ascii_uppercase)
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
+}
+
+fn dvdkey_protection(lines: &[&str]) -> Option<Vec<String>> {
+    if !dvdkey_has_css_cppm(lines) {
+        return None;
+    }
+
+    let mut values = Vec::new();
+    if let Some(region) = scalar_value(lines, "region management information:") {
+        values.push(format!("Region: {region}"));
+    }
+    values.push("Copyright Protection System Type: CSS/CPPM".to_owned());
+
+    if let Some(index) = lines.iter().position(|line| line.trim() == "title keys:") {
+        let title_keys_indent = lines[index].len() - lines[index].trim_start().len();
+        for line in &lines[index + 1..] {
+            let trimmed = line.trim();
+            let indent = line.len() - line.trim_start().len();
+            if trimmed.is_empty() || indent <= title_keys_indent {
+                break;
+            }
+            let Some((name, key)) = trimmed.split_once(':') else {
+                continue;
+            };
+            let Some(key) = normalized_dvd_key(key) else {
+                continue;
+            };
+            let name = name.trim();
+            if !name.is_empty() {
+                values.push(format!("{name} Title Key: {key}"));
+            }
+        }
+    }
+
+    if let Some(key) = scalar_value(lines, "disc key:").and_then(|key| normalized_dvd_key(&key)) {
+        values.push(format!("Decrypted Disc Key: {key}"));
+    }
+
+    Some(values)
+}
+
+fn protection(
+    protection_lines: Option<&[&str]>,
+    dvdkey_lines: Option<&[&str]>,
+    info_lines: Option<&[&str]>,
+) -> Option<String> {
     let mut values = Vec::new();
     let mut explicit_none = false;
 
@@ -406,6 +483,10 @@ fn protection(protection_lines: Option<&[&str]>, info_lines: Option<&[&str]>) ->
                 }
             }
         }
+    }
+
+    if let Some(dvdkey_values) = dvdkey_lines.and_then(dvdkey_protection) {
+        values.extend(dvdkey_values);
     }
 
     if let Some(lines) = info_lines {
@@ -462,6 +543,7 @@ mod tests {
             "PC",
             "GC",
             "WII",
+            "DVD-VIDEO",
             "AUDIO-CD",
             "ENHANCED-CD",
         ]
@@ -491,6 +573,10 @@ mod tests {
             (
                 "HDDVD".to_owned(),
                 vec!["hdvd30".to_owned(), "hdvd15".to_owned()],
+            ),
+            (
+                "DVD-VIDEO".to_owned(),
+                vec!["dvd5".to_owned(), "dvd9".to_owned()],
             ),
         ]
     }
@@ -906,6 +992,100 @@ LibCrypt"
 
         let absent = "*** PROTECTION (time check: 0s)\n";
         assert_eq!(parse(absent, &[]).protection, None);
+    }
+
+    #[test]
+    fn css_cppm_dvdkey_maps_to_dvd_video_and_formats_protection() {
+        let log = r#"drive information
+  profile: DVD-ROM
+*** DVDKEY (time check: 0s)
+
+copyright:
+  protection system type: CSS/CPPM
+  region management information: 1
+  disc key: 0A:15:22:1E:B0
+  title keys:
+    VTS_01_0.VOB: C7:DC:7C:E9:99
+    VTS_01_1.VOB: C7:DC:7C:E9:99
+    VTS_01_2.VOB: C7:DC:7C:E9:99
+    VTS_01_3.VOB: C7:DC:7C:E9:99
+
+*** SPLIT (time check: 0s)"#;
+
+        let parsed = parse_with_system_media(log, &systems_with_media());
+
+        assert_eq!(parsed.system_code.as_deref(), Some("DVD-VIDEO"));
+        assert_eq!(parsed.media_type.as_deref(), Some("dvd5"));
+        assert_eq!(
+            parsed.protection.as_deref(),
+            Some(
+                "Region: 1\n\
+Copyright Protection System Type: CSS/CPPM\n\
+VTS_01_0.VOB Title Key: C7 DC 7C E9 99\n\
+VTS_01_1.VOB Title Key: C7 DC 7C E9 99\n\
+VTS_01_2.VOB Title Key: C7 DC 7C E9 99\n\
+VTS_01_3.VOB Title Key: C7 DC 7C E9 99\n\
+Decrypted Disc Key: 0A 15 22 1E B0"
+            )
+        );
+    }
+
+    #[test]
+    fn latest_dvdkey_is_cumulative_between_protection_and_info_sources() {
+        let log = r#"*** DVDKEY (time check: 0s)
+copyright:
+  protection system type: CSS/CPPM
+  region management information: 8
+*** PROTECTION (time check: 0s)
+protection: SafeDisc 1
+*** DVDKEY (time check: 1s)
+copyright:
+  protection system type: CSS/CPPM
+  region management information: 2
+  disc key: aa:bb:cc:dd:ee
+  title keys:
+    VTS_02_0.VOB: 01:23:45:67:89
+*** INFO (time check: 0s)
+SecuROM [disc.bin]:
+  scheme: 3"#;
+
+        let parsed = parse(log, &systems());
+
+        assert_eq!(parsed.system_code.as_deref(), Some("DVD-VIDEO"));
+        assert_eq!(
+            parsed.protection.as_deref(),
+            Some(
+                "SafeDisc 1\n\
+Region: 2\n\
+Copyright Protection System Type: CSS/CPPM\n\
+VTS_02_0.VOB Title Key: 01 23 45 67 89\n\
+Decrypted Disc Key: AA BB CC DD EE\n\
+SecuROM scheme: 3"
+            )
+        );
+    }
+
+    #[test]
+    fn non_css_dvdkey_and_malformed_keys_are_not_filled() {
+        let unsupported = r#"*** DVDKEY (time check: 0s)
+copyright:
+  protection system type: CPRM
+  region management information: 1
+  disc key: 0A:15:22:1E:B0"#;
+        let parsed = parse(unsupported, &systems());
+        assert_eq!(parsed.system_code, None);
+        assert_eq!(parsed.protection, None);
+
+        let malformed = r#"*** DVDKEY (time check: 0s)
+copyright:
+  protection system type: CSS/CPPM
+  disc key: 0A:15:22:1E
+  title keys:
+    bad.vob: GG:DC:7C:E9:99"#;
+        assert_eq!(
+            parse(malformed, &systems()).protection.as_deref(),
+            Some("Copyright Protection System Type: CSS/CPPM")
+        );
     }
 
     #[test]
