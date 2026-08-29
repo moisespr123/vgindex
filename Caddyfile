@@ -36,6 +36,76 @@
 	}
 }
 
+# Self-identifying crawlers may index canonical public content, but generated
+# navigation is kept out of both robots.txt and the upstream applications.
+# This deliberately treats search, AI, archive, and SEO crawlers alike.
+(crawler_guard_app) {
+	@crawler_generated {
+		header_regexp User-Agent "(?i)(bot|crawler|spider|slurp|archiver|facebookexternalhit|meta-externalagent|meta-webindexer|aiwebindex)"
+		path /api/* /auth/* /login /logout /queue /queue/* /maintenance /maintenance/* /disc/submit /downloads/database /datfile/* /cues/* /keys/* /sbi/*
+	}
+	respond @crawler_generated "Crawler access to generated navigation is disabled.\n" 403
+
+	@crawler_filtered_discs {
+		header_regexp User-Agent "(?i)(bot|crawler|spider|slurp|archiver|facebookexternalhit|meta-externalagent|meta-webindexer|aiwebindex)"
+		path /discs
+		not query ""
+	}
+	respond @crawler_filtered_discs "Crawler access to generated navigation is disabled.\n" 403
+
+	@crawler_disc_edit {
+		header_regexp User-Agent "(?i)(bot|crawler|spider|slurp|archiver|facebookexternalhit|meta-externalagent|meta-webindexer|aiwebindex)"
+		path_regexp ^/disc/[^/]+/edit/?$
+	}
+	respond @crawler_disc_edit "Crawler access to generated navigation is disabled.\n" 403
+}
+
+(crawler_guard_forum) {
+	@crawler_generated {
+		header_regexp User-Agent "(?i)(bot|crawler|spider|slurp|archiver|facebookexternalhit|meta-externalagent|meta-webindexer|aiwebindex)"
+		path /search.php /ucp.php /mcp.php /posting.php /memberlist.php /app.php /app.php/*
+	}
+	respond @crawler_generated "Crawler access to generated navigation is disabled.\n" 403
+
+	@crawler_pagination {
+		header_regexp User-Agent "(?i)(bot|crawler|spider|slurp|archiver|facebookexternalhit|meta-externalagent|meta-webindexer|aiwebindex)"
+		query start=*
+	}
+	respond @crawler_pagination "Crawler access to generated navigation is disabled.\n" 403
+
+	@crawler_session {
+		header_regexp User-Agent "(?i)(bot|crawler|spider|slurp|archiver|facebookexternalhit|meta-externalagent|meta-webindexer|aiwebindex)"
+		query sid=*
+	}
+	respond @crawler_session "Crawler access to generated navigation is disabled.\n" 403
+}
+
+(crawler_guard_wiki) {
+	@crawler_generated {
+		header_regexp User-Agent "(?i)(bot|crawler|spider|slurp|archiver|facebookexternalhit|meta-externalagent|meta-webindexer|aiwebindex)"
+		path /index.php /api.php /rest.php/* /Special:*
+	}
+	respond @crawler_generated "Crawler access to generated navigation is disabled.\n" 403
+
+	@crawler_history {
+		header_regexp User-Agent "(?i)(bot|crawler|spider|slurp|archiver|facebookexternalhit|meta-externalagent|meta-webindexer|aiwebindex)"
+		query action=history
+	}
+	respond @crawler_history "Crawler access to wiki history is disabled.\n" 403
+
+	@crawler_old_revision {
+		header_regexp User-Agent "(?i)(bot|crawler|spider|slurp|archiver|facebookexternalhit|meta-externalagent|meta-webindexer|aiwebindex)"
+		query oldid=*
+	}
+	respond @crawler_old_revision "Crawler access to wiki history is disabled.\n" 403
+
+	@crawler_diff {
+		header_regexp User-Agent "(?i)(bot|crawler|spider|slurp|archiver|facebookexternalhit|meta-externalagent|meta-webindexer|aiwebindex)"
+		query diff=*
+	}
+	respond @crawler_diff "Crawler access to wiki history is disabled.\n" 403
+}
+
 {$APP_WWW_URL} {
 	import access_log
 	redir {$APP_PUBLIC_URL}{uri} permanent
@@ -45,15 +115,58 @@
 	import access_log
 	import security_headers
 	encode zstd
+	respond /robots.txt <<ROBOTS
+		User-agent: *
+		Disallow: /api/
+		Disallow: /auth/
+		Disallow: /login
+		Disallow: /logout
+		Disallow: /queue
+		Disallow: /maintenance
+		Disallow: /disc/submit
+		Disallow: /*/edit
+		Disallow: /discs?
+		Disallow: /downloads/database
+		Disallow: /datfile/
+		Disallow: /cues/
+		Disallow: /keys/
+		Disallow: /sbi/
+		ROBOTS 200
+	import crawler_guard_app
 	reverse_proxy {$APP_UPSTREAM_HOST}:{$APP_UPSTREAM_PORT}
 }
 
 {$PHPBB_PUBLIC_URL} {
 	import access_log
+	respond /robots.txt <<ROBOTS
+		User-agent: *
+		Disallow: /search.php
+		Disallow: /ucp.php
+		Disallow: /mcp.php
+		Disallow: /posting.php
+		Disallow: /memberlist.php
+		Disallow: /app.php
+		Disallow: /*?start=
+		Disallow: /*&start=
+		Disallow: /*?sid=
+		Disallow: /*&sid=
+		ROBOTS 200
+	import crawler_guard_forum
 	reverse_proxy phpbb:80
 }
 
 {$MEDIAWIKI_PUBLIC_URL} {
 	import access_log
+	respond /robots.txt <<ROBOTS
+		User-agent: *
+		Disallow: /index.php
+		Disallow: /api.php
+		Disallow: /rest.php/
+		Disallow: /Special:
+		Disallow: /*?*action=history
+		Disallow: /*?*oldid=
+		Disallow: /*?*diff=
+		ROBOTS 200
+	import crawler_guard_wiki
 	reverse_proxy mediawiki:80
 }
