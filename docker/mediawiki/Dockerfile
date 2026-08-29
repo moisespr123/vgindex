@@ -6,6 +6,8 @@ RUN set -eux; \
     docker-php-ext-install -j"$(nproc)" pgsql pdo_pgsql; \
     rm -rf /var/lib/apt/lists/*
 
+COPY docker/apache/mpm_prefork.conf /etc/apache2/mods-available/mpm_prefork.conf
+
 COPY --from=composer:2@sha256:7725eb4545c438629ae8bde3ef0bb9a5038ef566126ad878442a69007242d267 /usr/bin/composer /usr/bin/composer
 
 RUN set -eux; \
@@ -17,6 +19,11 @@ RUN set -eux; \
         https://gerrit.wikimedia.org/r/mediawiki/extensions/OpenIDConnect; \
     git -C OpenIDConnect checkout --detach ebf21a832f26a17541ab03f9b0a45dbb88b2dcdf; \
     cd OpenIDConnect && \
+    COMPOSER_ALLOW_SUPERUSER=1 composer remove --dev --no-update --no-interaction \
+        mediawiki/mediawiki-codesniffer \
+        mediawiki/minus-x \
+        php-parallel-lint/php-console-highlighter \
+        php-parallel-lint/php-parallel-lint; \
     COMPOSER_ALLOW_SUPERUSER=1 composer require --no-update --no-interaction \
         composer/installers:2.3.0 \
         paragonie/constant_time_encoding:3.1.3 \

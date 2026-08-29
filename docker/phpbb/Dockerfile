@@ -30,6 +30,8 @@ RUN set -eux; \
     a2enconf auth-headers; \
     rm -rf /var/lib/apt/lists/*
 
+COPY docker/apache/mpm_prefork.conf /etc/apache2/mods-available/mpm_prefork.conf
+
 RUN set -eux; \
     curl -fsSL -o /tmp/phpbb.zip \
         "https://download.phpbb.com/pub/release/3.3/${PHPBB_VERSION}/phpBB-${PHPBB_VERSION}.zip"; \
