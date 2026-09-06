@@ -129,6 +129,39 @@ function initMaintenanceUserPicker() {
     clearSelection();
 }
 
+function initMaintenanceUserReferences() {
+    document.querySelectorAll('[data-maintenance-user-reference]').forEach(function (picker) {
+        var idInput = picker.querySelector('[data-maintenance-user-reference-id]');
+        var nameInput = picker.querySelector('[data-maintenance-user-reference-input]');
+        var select = picker.querySelector('[data-maintenance-user-reference-select]');
+        if (!idInput || !nameInput || !select) return;
+
+        var usersByName = Object.create(null);
+        Array.prototype.forEach.call(select.options, function (option) {
+            var username = option.getAttribute('data-username');
+            if (username) usersByName[username] = option;
+        });
+
+        nameInput.addEventListener('input', function () {
+            var option = usersByName[nameInput.value];
+            idInput.value = option ? option.value : '';
+        });
+
+        select.addEventListener('change', function () {
+            var option = select.options[select.selectedIndex];
+            if (option && option.value) {
+                nameInput.value = option.getAttribute('data-username') || '';
+                idInput.value = option.value;
+            } else {
+                nameInput.value = '';
+                idInput.value = '';
+            }
+            select.value = '';
+            nameInput.focus();
+        });
+    });
+}
+
 document.addEventListener('DOMContentLoaded', function () {
     document.querySelectorAll('[data-maintenance-form]').forEach(function (form) {
         form.addEventListener('submit', function () {
@@ -144,4 +177,5 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
     initMaintenanceUserPicker();
+    initMaintenanceUserReferences();
 });

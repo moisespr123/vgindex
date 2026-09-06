@@ -127,6 +127,11 @@ impl HomepageCache {
         }
     }
 
+    pub async fn invalidate(&self) {
+        let _refresh = self.refresh.lock().await;
+        *self.inner.write().await = CachedHomepage::default();
+    }
+
     async fn get(&self, pool: &PgPool) -> Result<HomepageData, sqlx::Error> {
         self.get_with_loader(|| load_homepage_data(pool)).await
     }
@@ -549,6 +554,23 @@ mod tests {
 
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(second, first);
+    }
+
+    #[tokio::test]
+    async fn invalidating_homepage_cache_forces_a_refresh() {
+        let cache = HomepageCache::new(Duration::from_secs(60));
+        cache
+            .get_with_loader(|| async { Ok::<_, String>(homepage_data("before")) })
+            .await
+            .unwrap();
+
+        cache.invalidate().await;
+
+        let refreshed = cache
+            .get_with_loader(|| async { Ok::<_, String>(homepage_data("after")) })
+            .await
+            .unwrap();
+        assert_eq!(refreshed, homepage_data("after"));
     }
 
     #[tokio::test]

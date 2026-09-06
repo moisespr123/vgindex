@@ -3477,6 +3477,159 @@ textarea.full-width-textarea {
     text-align: center;
 }
 
+.maintenance-submission-lookup {
+    display: grid;
+    grid-template-columns: 6.5rem minmax(0, 12rem) auto;
+    align-items: center;
+    column-gap: 0.45rem;
+    width: min(32rem, 100%);
+    margin: 0 auto 1rem;
+}
+
+.maintenance-submission-lookup label {
+    margin: 0;
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1.1;
+    text-align: right;
+    white-space: nowrap;
+}
+
+.maintenance-submission-lookup input[type="text"] {
+    width: 100%;
+    height: auto;
+    margin: 0;
+    padding: 0.15rem 0.35rem;
+    font-size: 0.75rem;
+}
+
+.maintenance-submission-lookup button {
+    width: auto;
+    margin: 0;
+    padding: 0.25rem 0.75rem;
+    font-size: 0.75rem;
+    line-height: 1.2;
+}
+
+.maintenance-submission-warning,
+.maintenance-submission-readonly,
+.maintenance-submission-form {
+    width: min(52rem, 100%);
+    margin-right: auto;
+    margin-left: auto;
+}
+
+.maintenance-submission-readonly {
+    display: grid;
+    gap: 0.35rem;
+    margin-bottom: 1rem;
+    padding: 0.65rem;
+    border: var(--pico-border-width) solid var(--pico-form-element-border-color);
+    font-size: 0.75rem;
+}
+
+.maintenance-submission-readonly div {
+    display: grid;
+    grid-template-columns: 10rem minmax(0, 1fr);
+    gap: 0.5rem;
+}
+
+.maintenance-submission-readonly code {
+    overflow-wrap: anywhere;
+}
+
+.maintenance-submission-fields {
+    display: grid;
+    gap: 0.45rem;
+    width: min(32rem, 100%);
+    margin: 0 auto;
+}
+
+.maintenance-submission-fields > label {
+    display: grid;
+    grid-template-columns: 6.5rem minmax(0, 1fr);
+    align-items: center;
+    column-gap: 0.45rem;
+    margin: 0;
+}
+
+.maintenance-submission-fields > label > span:first-child,
+.maintenance-submission-wide-field > span:first-child {
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1.1;
+}
+
+.maintenance-submission-fields > label > span:first-child {
+    text-align: right;
+    white-space: nowrap;
+}
+
+.maintenance-submission-fields input[type="text"],
+.maintenance-submission-fields select {
+    width: 100%;
+    min-width: 0;
+    height: auto;
+    margin: 0;
+    padding: 0.15rem 0.35rem;
+    font-size: 0.75rem;
+}
+
+.maintenance-submission-fields select {
+    padding-right: 1.7rem;
+}
+
+.maintenance-submission-wide-field {
+    display: block;
+    width: 100%;
+    margin: 0.75rem auto 0;
+}
+
+.maintenance-submission-wide-field > span:first-child {
+    display: block;
+    margin-bottom: 0.2rem;
+}
+
+.maintenance-submission-wide-field textarea {
+    width: 100%;
+    margin: 0;
+    padding: 0.2rem 0.35rem;
+    resize: vertical;
+    font-size: 0.75rem;
+}
+
+.maintenance-submission-code-field textarea {
+    font-family: var(--pico-font-family-monospace);
+}
+
+.maintenance-submission-save {
+    margin-top: 1rem;
+    text-align: center;
+}
+
+.maintenance-submission-save button {
+    width: auto;
+    margin: 0;
+    padding: 0.25rem 0.75rem;
+    font-size: 0.75rem;
+    line-height: 1.2;
+}
+
+@media (max-width: 700px) {
+    .maintenance-submission-lookup {
+        grid-template-columns: 6.5rem minmax(0, 1fr);
+    }
+
+    .maintenance-submission-lookup button {
+        grid-column: 2;
+        justify-self: start;
+    }
+
+    .maintenance-submission-readonly div {
+        grid-template-columns: 1fr;
+    }
+}
+
 .maintenance-users-note,
 .maintenance-users-empty,
 .maintenance-users-picker-help {

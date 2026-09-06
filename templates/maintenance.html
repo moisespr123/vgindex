@@ -38,6 +38,7 @@
     <a href="/maintenance?tab=misc" {% if show_misc %}class="active"{% endif %}>Miscellaneous</a>
     {% if can_admin %}
     <a href="/maintenance?tab=users" {% if show_users %}class="active"{% endif %}>Users</a>
+    <a href="/maintenance?tab=submissions" {% if show_submissions %}class="active"{% endif %}>Submissions</a>
     <a href="/maintenance?tab=backup" {% if show_backup %}class="active"{% endif %}>Backup</a>
     {% endif %}
 </nav>
@@ -201,6 +202,137 @@
 </section>
 
 {% if can_admin %}
+<section id="maintenance-submissions-panel" class="maintenance-panel" {% if !show_submissions %}hidden{% endif %}>
+    <form method="get" action="/maintenance" class="maintenance-submission-lookup">
+        <input type="hidden" name="tab" value="submissions">
+        <label for="maintenance-submission-id">Submission ID</label>
+        <input type="text" id="maintenance-submission-id" name="submission_id" inputmode="numeric" pattern="[0-9]+" value="{{ submission_lookup_id }}" autocomplete="off" required>
+        <button type="submit">Load Submission</button>
+    </form>
+
+    {% match submission_editor %}
+    {% when Some with (submission) %}
+    <div class="validation-errors maintenance-submission-warning" role="alert">
+        <strong>Record repair only:</strong> Saving updates the submission history row directly. Changes to status or JSON are not applied to the associated disc.
+    </div>
+
+    <div class="maintenance-submission-readonly">
+        <div><strong>ID</strong><span>{{ submission.id }}</span></div>
+        <div><strong>Submission Token</strong><code>{% if submission.submission_token.is_empty() %}NULL{% else %}{{ submission.submission_token }}{% endif %}</code></div>
+        <div><strong>Submission Fingerprint</strong><code>{% if submission.submission_fingerprint.is_empty() %}NULL{% else %}{{ submission.submission_fingerprint }}{% endif %}</code></div>
+        <a href="/queue/{{ submission.id }}">Open queue detail</a>
+    </div>
+
+    <form method="post" action="/maintenance/submissions/{{ submission.id }}" class="maintenance-submission-form">
+        {% match current_user %}
+        {% when Some with (user) %}
+        <input type="hidden" name="_csrf" value="{{ user.csrf_token }}">
+        {% when None %}
+        {% endmatch %}
+        <input type="hidden" name="row_version" value="{{ submission.row_version }}">
+
+        <div class="maintenance-submission-fields">
+            <label>
+                <span>Submission Type</span>
+                <select name="submission_type" required>
+                    <option value="Disc" {% if submission.submission_type == "Disc" %}selected{% endif %}>Disc</option>
+                    <option value="Edit" {% if submission.submission_type == "Edit" %}selected{% endif %}>Edit</option>
+                </select>
+            </label>
+
+            <label>
+                <span>Status</span>
+                <select name="status" required>
+                    <option value="Pending" {% if submission.status == "Pending" %}selected{% endif %}>Pending</option>
+                    <option value="Draft" {% if submission.status == "Draft" %}selected{% endif %}>Draft</option>
+                    <option value="Approved" {% if submission.status == "Approved" %}selected{% endif %}>Approved</option>
+                    <option value="Rejected" {% if submission.status == "Rejected" %}selected{% endif %}>Rejected</option>
+                    <option value="Legacy" {% if submission.status == "Legacy" %}selected{% endif %}>Legacy</option>
+                </select>
+            </label>
+
+            <label>
+                <span>Submitter</span>
+                <span class="maintenance-user-picker maintenance-user-reference" data-maintenance-user-reference>
+                    <input type="hidden" name="submitter_id" value="{{ submission.submitter_id }}" data-maintenance-user-reference-id>
+                    <input type="text" name="submitter_username" value="{{ submission.submitter_username }}" autocomplete="off" autocapitalize="none" spellcheck="false" required data-maintenance-user-reference-input>
+                    <select class="maintenance-user-select" aria-label="Choose submitter" data-maintenance-user-reference-select>
+                        <option value=""></option>
+                        {% for option in submission_users %}
+                        <option value="{{ option.id }}" data-username="{{ option.username }}">{{ option.username }}</option>
+                        {% endfor %}
+                    </select>
+                </span>
+            </label>
+
+            <label>
+                <span>Reviewer</span>
+                <span class="maintenance-user-picker maintenance-user-reference" data-maintenance-user-reference>
+                    <input type="hidden" name="reviewer_id" value="{{ submission.reviewer_id }}" data-maintenance-user-reference-id>
+                    <input type="text" name="reviewer_username" value="{{ submission.reviewer_username }}" autocomplete="off" autocapitalize="none" spellcheck="false" data-maintenance-user-reference-input>
+                    <select class="maintenance-user-select" aria-label="Choose reviewer" data-maintenance-user-reference-select>
+                        <option value=""></option>
+                        {% for option in submission_users %}
+                        <option value="{{ option.id }}" data-username="{{ option.username }}">{{ option.username }}</option>
+                        {% endfor %}
+                    </select>
+                </span>
+            </label>
+
+            <label>
+                <span>Target Disc ID</span>
+                <input type="text" name="target_disc_id" inputmode="numeric" pattern="[0-9]+" value="{{ submission.target_disc_id }}" placeholder="NULL">
+            </label>
+
+            <label>
+                <span>Extra Upload URL</span>
+                <input type="text" name="extra_upload_url" maxlength="512" value="{{ submission.extra_upload_url }}" placeholder="NULL">
+            </label>
+
+            <label>
+                <span>Created At</span>
+                <input type="text" name="created_at" value="{{ submission.created_at }}" placeholder="2026-09-06T12:34:56Z" required>
+            </label>
+
+            <label>
+                <span>Reviewed At</span>
+                <input type="text" name="reviewed_at" value="{{ submission.reviewed_at }}" placeholder="NULL or RFC 3339">
+            </label>
+        </div>
+
+        <label class="maintenance-submission-wide-field">
+            <span>Submission Comment</span>
+            <textarea name="submission_comment" rows="4" placeholder="NULL">{{ submission.submission_comment }}</textarea>
+        </label>
+
+        <label class="maintenance-submission-wide-field">
+            <span>Review Comment</span>
+            <textarea name="review_comment" rows="4" placeholder="NULL">{{ submission.review_comment }}</textarea>
+        </label>
+
+        <label class="maintenance-submission-wide-field maintenance-submission-code-field">
+            <span>Original Changes (JSON; blank stores SQL NULL)</span>
+            <textarea name="changes_original" rows="14" spellcheck="false" placeholder="NULL">{{ submission.changes_original }}</textarea>
+        </label>
+
+        <label class="maintenance-submission-wide-field maintenance-submission-code-field">
+            <span>Changes (JSON)</span>
+            <textarea name="changes" rows="18" spellcheck="false" required>{{ submission.changes }}</textarea>
+        </label>
+
+        <label class="maintenance-submission-wide-field maintenance-submission-code-field">
+            <span>Dump Log</span>
+            <textarea name="dump_log" rows="12" spellcheck="false" placeholder="NULL">{{ submission.dump_log }}</textarea>
+        </label>
+
+        <div class="maintenance-submission-save">
+            <button type="submit">Save Submission</button>
+        </div>
+    </form>
+    {% when None %}
+    {% endmatch %}
+</section>
+
 <section id="maintenance-users-panel" class="maintenance-panel" {% if !show_users %}hidden{% endif %}>
     <p class="maintenance-users-note">Logging out a user revokes all current app sessions. If the user is still permitted and logged in on the forum, the app can sign them in again automatically.</p>
 
