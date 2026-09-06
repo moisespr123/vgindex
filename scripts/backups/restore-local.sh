@@ -27,8 +27,25 @@ archive="$(realpath "$archive")"
 
 cd "$repo_root"
 
-phase="stopping local web services"
-docker compose stop caddy app phpbb mediawiki
+phase="validating backup archive"
+required_entries=(
+    databases/app.dump
+    databases/phpbb.dump
+    databases/mediawiki.dump
+    phpbb_files
+    phpbb_avatars
+    mediawiki_uploads
+)
+if ! tar -tzf "$archive" "${required_entries[@]}" >/dev/null; then
+    echo "ERROR: backup archive is invalid or incomplete: ${archive}" >&2
+    exit 2
+fi
+
+phase="deleting local Compose containers and volumes"
+docker compose down --volumes --remove-orphans
+
+phase="starting fresh local PostgreSQL"
+docker compose up -d --wait postgres
 
 phase="restoring databases and content volumes"
 docker compose --profile backup run --rm --no-deps -T \

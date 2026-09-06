@@ -151,15 +151,19 @@ For local testing, generate a backup from the running Compose stack:
 docker compose --profile backup run --rm backup
 ```
 
-Download the archive through the administrator UI or copy it out of the backup
-volume, then import it into an initialized local stack:
+Download the archive through the administrator UI or copy it to the host
+filesystem outside the Compose-managed volumes, then restore it locally:
 
 ```bash
 ./scripts/backups/restore-local.sh /path/to/vgindex-backup-YYYYMMDDTHHMMSSZ.tar.gz
 ```
 
-The restore command replaces the three local databases and the persisted phpBB
-and MediaWiki content volumes. It preserves the local phpBB signing-key volume,
-refreshes phpBB's OIDC configuration from the local `.env`, and restarts the
-web services. It prints the failing phase and returns the original nonzero exit
-code if a command fails; it does not attempt recovery.
+The restore command validates the archive, deletes all local Compose-managed
+volumes, and recreates the stack from a clean slate. This removes PostgreSQL
+data, phpBB files and signing keys, MediaWiki uploads, generated archives, local
+backup storage, and Caddy state. It then imports the three databases and backed
+up content, regenerates the local phpBB signing keys, refreshes phpBB's OIDC
+configuration from the local `.env`, and restarts the web services. There is no
+confirmation prompt. If a command fails after deletion, the script prints the
+failing phase and returns the original nonzero exit code without attempting
+recovery.
