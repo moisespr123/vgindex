@@ -2450,6 +2450,7 @@ async fn review_submit(
             &state.pool,
             form.disc.files_xml.as_deref(),
             form.disc.universal_hash.as_deref(),
+            form.disc.filename_suffix.as_deref(),
         )
         .await?
         {
@@ -2459,6 +2460,7 @@ async fn review_submit(
                 target_disc_id,
                 form.disc.files_xml.as_deref(),
                 form.disc.universal_hash.as_deref(),
+                form.disc.filename_suffix.as_deref(),
             )
             .await?;
 

@@ -462,7 +462,30 @@ pub async fn find_matching_disc_by_universal_hash(
     pool: &PgPool,
     universal_hash: &str,
 ) -> AppResult<Option<i32>> {
-    find_matching_disc_by_universal_hash_excluding(pool, universal_hash, None).await
+    find_matching_disc_by_universal_hash_excluding(pool, universal_hash, None, None).await
+}
+
+const UNIVERSAL_HASH_TARGET_MATCH_SQL: &str = "SELECT id
+         FROM discs
+         WHERE universal_hash = $1
+           AND status <> 'Disabled'
+           AND COALESCE(filename_suffix, '') = COALESCE($2, '')
+         ORDER BY id
+         LIMIT 1";
+
+pub async fn find_matching_disc_by_universal_hash_and_filename_suffix(
+    pool: &PgPool,
+    universal_hash: &str,
+    filename_suffix: Option<&str>,
+) -> AppResult<Option<i32>> {
+    let Some(hash_bytes) = universal_hash_bytes_for_matching(Some(universal_hash)) else {
+        return Ok(None);
+    };
+    Ok(sqlx::query_scalar(UNIVERSAL_HASH_TARGET_MATCH_SQL)
+        .bind(hash_bytes)
+        .bind(filename_suffix.map(str::trim).filter(|value| !value.is_empty()))
+        .fetch_optional(pool)
+        .await?)
 }
 
 const UNIVERSAL_HASH_MATCH_SQL: &str = "SELECT id
@@ -470,6 +493,7 @@ const UNIVERSAL_HASH_MATCH_SQL: &str = "SELECT id
          WHERE universal_hash = $1
            AND status <> 'Disabled'
            AND ($2::INT IS NULL OR id <> $2)
+           AND ($3::TEXT IS NULL OR COALESCE(filename_suffix, '') = COALESCE($3, ''))
          ORDER BY id
          LIMIT 1";
 
@@ -477,6 +501,7 @@ async fn find_matching_disc_by_universal_hash_excluding(
     pool: &PgPool,
     universal_hash: &str,
     exclude_disc_id: Option<i32>,
+    exclude_filename_suffix: Option<&str>,
 ) -> AppResult<Option<i32>> {
     let Some(hash_bytes) = universal_hash_bytes_for_matching(Some(universal_hash)) else {
         return Ok(None);
@@ -484,6 +509,7 @@ async fn find_matching_disc_by_universal_hash_excluding(
     Ok(sqlx::query_scalar(UNIVERSAL_HASH_MATCH_SQL)
         .bind(hash_bytes)
         .bind(exclude_disc_id)
+        .bind(exclude_filename_suffix)
         .fetch_optional(pool)
         .await?)
 }
@@ -508,6 +534,7 @@ pub(crate) async fn find_unambiguous_exact_disc_match(
     pool: &PgPool,
     files_xml: Option<&str>,
     universal_hash: Option<&str>,
+    filename_suffix: Option<&str>,
 ) -> AppResult<Option<i32>> {
     let dat_match = match files_xml.map(str::trim).filter(|value| !value.is_empty()) {
         Some(files_xml) => find_matching_disc(pool, files_xml).await?,
@@ -517,7 +544,14 @@ pub(crate) async fn find_unambiguous_exact_disc_match(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        Some(universal_hash) => find_matching_disc_by_universal_hash(pool, universal_hash).await?,
+        Some(universal_hash) => {
+            find_matching_disc_by_universal_hash_and_filename_suffix(
+                pool,
+                universal_hash,
+                filename_suffix,
+            )
+            .await?
+        }
         None => None,
     };
     Ok(resolve_exact_disc_match(dat_match, universal_hash_match))
@@ -1447,9 +1481,17 @@ async fn find_approval_conflicts_for_effective_data(
     }
 
     if let Some(universal_hash) = universal_hash_conflict_input(changes, effective_data) {
-        if let Some(disc_id) =
-            find_matching_disc_by_universal_hash_excluding(pool, universal_hash, target_disc_id)
-                .await?
+        let filename_suffix = effective_data["filename_suffix"]
+            .as_str()
+            .unwrap_or("")
+            .trim();
+        if let Some(disc_id) = find_matching_disc_by_universal_hash_excluding(
+            pool,
+            universal_hash,
+            target_disc_id,
+            Some(filename_suffix),
+        )
+        .await?
         {
             conflicts.push(ApprovalConflict {
                 text: "Universal hash already exists:".to_string(),
@@ -1790,11 +1832,18 @@ pub(crate) async fn retarget_pending_submission(
     expected_target_disc_id: i32,
     files_xml: Option<&str>,
     universal_hash: Option<&str>,
+    filename_suffix: Option<&str>,
 ) -> AppResult<bool> {
     let mut tx = pool.begin().await?;
     acquire_approval_lock(&mut tx).await?;
 
-    if find_unambiguous_exact_disc_match(pool, files_xml, universal_hash).await?
+    if find_unambiguous_exact_disc_match(
+        pool,
+        files_xml,
+        universal_hash,
+        filename_suffix,
+    )
+    .await?
         != Some(expected_target_disc_id)
     {
         tx.rollback().await?;
@@ -2720,7 +2769,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            find_unambiguous_exact_disc_match(&pool, Some(dat), Some(&universal_hash))
+            find_unambiguous_exact_disc_match(&pool, Some(dat), Some(&universal_hash), None)
                 .await
                 .unwrap(),
             Some(fixture.disc_id)
@@ -2766,6 +2815,7 @@ mod tests {
             fixture.disc_id,
             Some(dat),
             Some(&universal_hash),
+            None,
         )
         .await
         .unwrap();
@@ -2787,6 +2837,7 @@ mod tests {
             fixture.disc_id,
             Some(dat),
             Some(&universal_hash),
+            None,
         )
         .await
         .unwrap();
@@ -4008,6 +4059,19 @@ mod tests {
     fn verification_match_queries_always_exclude_disabled_discs() {
         assert!(DAT_MATCH_CANDIDATES_SQL.contains("d.status <> 'Disabled'"));
         assert!(UNIVERSAL_HASH_MATCH_SQL.contains("status <> 'Disabled'"));
+    }
+
+    #[test]
+    fn universal_hash_conflict_query_requires_the_same_filename_suffix() {
+        assert!(UNIVERSAL_HASH_MATCH_SQL
+            .contains("COALESCE(filename_suffix, '') = COALESCE($3, '')"));
+        assert!(UNIVERSAL_HASH_MATCH_SQL.contains("$3::TEXT IS NULL"));
+    }
+
+    #[test]
+    fn universal_hash_target_query_requires_the_same_filename_suffix() {
+        assert!(UNIVERSAL_HASH_TARGET_MATCH_SQL
+            .contains("COALESCE(filename_suffix, '') = COALESCE($2, '')"));
     }
 
     #[test]
