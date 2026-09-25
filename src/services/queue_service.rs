@@ -1543,7 +1543,9 @@ fn universal_hash_conflict_input<'a>(
     changes: &serde_json::Value,
     effective_data: &'a serde_json::Value,
 ) -> Option<&'a str> {
-    if !change_set_contains(changes, "universal_hash") {
+    if !change_set_contains(changes, "universal_hash")
+        && !change_set_contains(changes, "filename_suffix")
+    {
         return None;
     }
     effective_data["universal_hash"]
@@ -4547,14 +4549,22 @@ mod tests {
     }
 
     #[test]
-    fn universal_hash_conflict_check_runs_only_when_hash_is_in_changes() {
+    fn universal_hash_conflict_check_runs_when_hash_or_suffix_changes() {
         let effective = serde_json::json!({
-            "universal_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            "universal_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "filename_suffix": "suffix"
         });
 
         assert_eq!(
             universal_hash_conflict_input(
                 &serde_json::json!({"universal_hash": {"add": {"new": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}}),
+                &effective
+            ),
+            Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+        );
+        assert_eq!(
+            universal_hash_conflict_input(
+                &serde_json::json!({"filename_suffix": {"modify": {"old": "old", "new": "suffix"}}}),
                 &effective
             ),
             Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
